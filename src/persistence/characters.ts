@@ -1,12 +1,31 @@
 import { z } from 'zod';
-import { abilities, skillInfo, type Character } from '../domain/types';
+import { abilities, allSkills, zeros, type Character } from '../domain/types';
 import { integrityErrors } from '../domain/engine';
 const scoreSchema = (min: number, max: number) => z.strictObject(Object.fromEntries(abilities.map(a => [a, z.number().int().min(min).max(max)])) as Record<typeof abilities[number], z.ZodNumber>);
-const schema = z.strictObject({ schemaVersion: z.literal(1), id: z.uuid(), edition: z.enum(['2014', '2024']), name: z.string().max(80), level: z.literal(1), classId: z.string().max(80), speciesId: z.string().max(80), backgroundId: z.string().max(80), scores: scoreSchema(8, 15), boosts: scoreSchema(0, 2), skills: z.array(z.enum(Object.keys(skillInfo) as [keyof typeof skillInfo, ...(keyof typeof skillInfo)[]])).max(4), notes: z.string().max(4000), updatedAt: z.iso.datetime() });
+const skill = z.enum(allSkills as [typeof allSkills[number], ...typeof allSkills]);
+const ability = z.enum(abilities);
+const id = z.string().max(80);
+const fields = {
+  id: z.uuid(), edition: z.enum(['2014', '2024']), name: z.string().max(80), level: z.number().int().min(1).max(20),
+  classId: id, speciesId: id, backgroundId: id, scores: scoreSchema(8, 15), boosts: scoreSchema(0, 2),
+  skills: z.array(skill).max(4), notes: z.string().max(4000), updatedAt: z.iso.datetime(),
+};
+const schemaV1 = z.strictObject({ schemaVersion: z.literal(1), ...fields, level: z.literal(1) });
+const schemaV2 = z.strictObject({
+  schemaVersion: z.literal(2), ...fields,
+  backgroundTheme: id, variantId: id, speciesAbilities: z.array(ability).max(3), speciesSkills: z.array(skill).max(3), backgroundSkills: z.array(skill).max(3),
+  asi: scoreSchema(0, 12), fightingStyleId: id, masteries: z.array(id).max(6), kitId: id, armorId: id, shield: z.boolean(), weaponIds: z.array(id).max(6),
+});
 export const STORAGE_KEY = 'forja-de-herois.characters.v1';
 export const MAX_IMPORT_BYTES = 100_000;
+/** Personagens salvos na versão 1 (nível 1, sem equipamento) são migrados sem perder escolhas. */
+function migrate(value: unknown): unknown {
+  const v1 = schemaV1.safeParse(value);
+  if (!v1.success) return value;
+  return { ...v1.data, schemaVersion: 2, backgroundTheme: '', variantId: '', speciesAbilities: [], speciesSkills: [], backgroundSkills: [], asi: zeros(), fightingStyleId: '', masteries: [], kitId: '', armorId: '', shield: false, weaponIds: [] };
+}
 export function parseCharacter(value: unknown): Character {
-  const result = schema.safeParse(value);
+  const result = schemaV2.safeParse(migrate(value));
   if (!result.success) throw new Error('Arquivo incompatível: confira a versão, os campos e os limites do personagem.');
   const c = result.data as Character;
   const errors = integrityErrors(c);

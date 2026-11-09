@@ -4,7 +4,11 @@
 
 Conversa guiada, quatro classes, três espécies/raças por edição, antecedentes do recorte, atributos, perícias básicas, cálculos base, biblioteca local, JSON, PDF e CI. Sempre identificado como rascunho.
 
-## 0.2: completar um caminho inteiro
+## Marco entregue: 0.2, todas as classes e níveis 1–20
+
+12 classes e 9 espécies por edição, antecedentes, escolha de nível (padrão 1), textos de orientação, estilo de luta, maestrias, equipamento, PV, CA, ataques, espaços de magia e poderes por nível. Pendentes: catálogo de magias, talentos e escolhas internas de classe (ver `docs/FONTES.md`). O restante desta seção descreve o plano original.
+
+## 0.2 (plano original): completar um caminho inteiro
 
 Priorizar Guerreiro de nível 1 em cada edição separadamente: estilos de luta, Segundo Fôlego, equipamentos iniciais, proficiências, armas/ataques, CA equipada e maestrias de 2024. Completar idiomas, traços raciais, ferramentas e talentos do antecedente escolhido. Acrescentar casos de referência comparados manualmente ao SRD. Somente então permitir o estado “pronto para revisão da mesa” nesse caminho.
 

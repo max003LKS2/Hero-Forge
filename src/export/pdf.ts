@@ -1,18 +1,18 @@
 import { jsPDF } from 'jspdf';
 import { attribution51, attribution521 } from '../data/catalog';
-import { creationErrors, derive, pendingRules, selections, signed } from '../domain/engine';
-import { abilities, labels, skillInfo, type Character, type Skill } from '../domain/types';
+import { creationErrors, derive, pendingRules, selections, signed, weaponById } from '../domain/engine';
+import { abilities, allSkills, labels, skillInfo, type Character } from '../domain/types';
 import { parseCharacter } from '../persistence/characters';
 
-// Built-in Helvetica supports Portuguese (WinAnsi). Preserve full Unicode in JSON;
-// use a visible replacement for characters outside this PDF font's repertoire.
-const printable = (text: string) => text.normalize('NFC').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[–—]/g, '-').replace(/[^\x20-\x7e\xa0-\xff\n]/gu, '?');
+// A Helvetica embutida suporta português (WinAnsi). O JSON preserva Unicode completo;
+// caracteres fora do repertório do PDF são substituídos por um marcador visível.
+const printable = (text: string) => text.normalize('NFC').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[–—]/g, '-').replace(/[●✓]/gu, '*').replace(/[^\x20-\x7e\xa0-\xff\n]/gu, '?');
 export function createCharacterPdf(input: Character): jsPDF {
   const c = parseCharacter(input);
   const d = derive(c);
-  const { cls, species, background, catalog } = selections(c);
+  const { cls, species, background, catalog, subclass, variant, style } = selections(c);
   const doc = new jsPDF({ format: 'a4', unit: 'mm', compress: true });
-  doc.setProperties({ title: `Forja de Heróis - ${printable(c.name)}`, subject: 'Ficha provisória de nível 1', creator: 'Forja de Heróis' });
+  doc.setProperties({ title: `Forja de Heróis - ${printable(c.name)}`, subject: `Ficha provisória de nível ${c.level}`, creator: 'Forja de Heróis' });
   let y = 22;
   const line = (text: string, size = 10, bold = false) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
@@ -36,19 +36,35 @@ export function createCharacterPdf(input: Character): jsPDF {
   line('FORJA DE HERÓIS', 22, true);
   line('FICHA PROVISÓRIA - conferir pendências antes de jogar', 10, true);
   line(c.name || 'Herói sem nome', 18, true);
-  line(`Edição ${c.edition} | ${c.edition === '2014' ? 'SRD 5.1' : 'SRD 5.2.1'} | Nível 1`);
-  line(`${cls?.name ?? 'Classe pendente'} | ${species?.name ?? 'Origem pendente'} | ${background?.name ?? 'Antecedente pendente'}`);
+  line(`Edição ${c.edition} | ${c.edition === '2014' ? 'SRD 5.1' : 'SRD 5.2.1'} | Nível ${c.level}`);
+  line(`${cls?.name ?? 'Classe pendente'}${subclass ? ` (${subclass.name})` : ''} | ${species?.name ?? 'Origem pendente'}${variant ? ` (${variant.name})` : ''} | ${background?.name ?? 'Antecedente pendente'}`);
   section('ATRIBUTOS');
   grid(abilities.map(a => `${labels[a]}: ${d.scores[a]} (${signed(d.mods[a])}) | base ${c.scores[a]} | bônus ${signed(d.scores[a] - c.scores[a])}`));
-  section('VALORES BASE');
-  line(`PV base: ${d.hp ?? '-'} | Dado de Vida: ${cls ? `1d${cls.hitDie}` : '-'} | Proficiência: +2`);
-  line(`CA sem armadura: ${d.baseAC} | Iniciativa base: ${signed(d.baseInitiative)} | Deslocamento: ${d.speed ?? '-'} pés`);
-  line(`Tamanho: ${species?.size ?? '-'} | Percepção passiva base: ${d.passivePerception}`);
-  line('Sem aplicação de equipamentos, talentos, magias ou efeitos situacionais. Ex.: Alerta de 2024 ainda não foi aplicado à iniciativa.', 8);
-  section('SALVAGUARDAS BASE');
+  section('VALORES');
+  line(`PV: ${d.hp ?? '-'} | Dado de Vida: ${d.hitDice} | Proficiência: ${signed(d.proficiency)}`);
+  line(`CA: ${d.ac} (${d.acNote}) | Iniciativa: ${signed(d.initiative)} | Deslocamento: ${d.speed ?? '-'} pés`);
+  line(`Tamanho: ${species?.size ?? '-'} | Percepção passiva: ${d.passivePerception}`);
+  for (const w of d.warnings) line(`Atenção: ${w}`, 8);
+  if (style) line(`Estilo de luta: ${style.name}`);
+  section('ATAQUES');
+  if (d.attacks.length) for (const a of d.attacks) line(`${a.name}: ${signed(a.bonus)} para atingir | dano ${a.damage} ${a.damageType}${a.versatile ? ` (duas mãos ${a.versatile})` : ''}${a.mastery ? ` | Maestria: ${a.mastery}` : ''}${a.notes.length ? ` | ${a.notes.join('; ')}` : ''}`, 9);
+  else line('Nenhuma arma selecionada.', 9);
+  if (c.masteries.length) line(`Maestrias: ${c.masteries.map(id => weaponById(id)?.name).join(', ')}`, 9);
+  if (d.spellcasting) {
+    const s = d.spellcasting;
+    section('MAGIA');
+    line(`Atributo: ${labels[s.ability]} | CD ${s.dc} | Ataque mágico ${signed(s.attack)} | Truques: ${s.cantrips} | Magias ${cls?.spellcasting?.kind === 'known' ? 'conhecidas' : 'preparadas'}: ${s.prepared}`, 9);
+    line(s.pact ? `Magia de Pacto: ${s.pact.count} espaço(s) de ${s.pact.level}º círculo` : `Espaços: ${s.slots.map((n, i) => `${i + 1}º ${n}`).join(' | ') || 'nenhum'}`, 9);
+  }
+  section('SALVAGUARDAS');
   grid(abilities.map(a => `${labels[a]}: ${signed(d.saves[a])}${cls?.saves.includes(a) ? ' (proficiente)' : ''}`));
-  section('PERÍCIAS BASE');
-  grid((Object.keys(skillInfo) as Skill[]).map(s => `${skillInfo[s][0]}: ${signed(d.skills[s])}${d.trained.has(s) ? ' (proficiente)' : ''}`));
+  section('PERÍCIAS');
+  grid(allSkills.map(s => `${skillInfo[s][0]}: ${signed(d.skills[s])}${d.trained.has(s) ? ' (proficiente)' : ''}`));
+  section('PODERES DA CLASSE');
+  for (const f of d.classFeatures) line(`Nível ${f.level} - ${f.name}: ${f.description}`, 8);
+  if (subclass && d.subclassFeatures.length) { section(`SUBCLASSE: ${subclass.name.toUpperCase()}`); for (const f of d.subclassFeatures) line(`Nível ${f.level} - ${f.name}: ${f.description}`, 8); }
+  if (d.speciesTraits.length) { section('TRAÇOS DA ESPÉCIE'); for (const t of d.speciesTraits) line(`${t.name}: ${t.description}`, 8); }
+  if (background?.feat) { section('ANTECEDENTE'); line(`${background.feat.name}: ${background.feat.description}`, 8); line(`Ferramentas: ${background.tools} | Equipamento: ${background.equipment}`, 8); }
   doc.addPage(); y = 22;
   line(`${c.name || 'Herói sem nome'} - Revisão e fontes`, 16, true);
   section('PENDÊNCIAS');

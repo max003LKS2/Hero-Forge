@@ -1,10 +1,68 @@
 import { describe, expect, it } from 'vitest';
 import { catalogs } from '../data/catalog';
 import { abilities, zeros, type Character } from './types';
-import { creationErrors, derive, integrityErrors, modifier, newCharacter, pointSpend } from './engine';
+import { creationErrors, derive, integrityErrors, modifier, newCharacter, pointSpend, proficiencyBonus, sanitize } from './engine';
 export function fixture(edition: '2014' | '2024' = '2024'): Character {
-  return { ...newCharacter(edition), name: 'Aurora', classId: `${edition}:fighter`, speciesId: edition === '2024' ? '2024:dwarf' : '2014:hill-dwarf', backgroundId: `${edition}:acolyte`, scores: { str: 15, dex: 14, con: 13, int: 12, wis: 10, cha: 8 }, boosts: edition === '2024' ? { ...zeros(), wis: 2, cha: 1 } : zeros(), skills: ['athletics', 'perception'] };
+  return { ...newCharacter(edition), name: 'Aurora', classId: `${edition}:fighter`, speciesId: edition === '2024' ? '2024:dwarf' : '2014:hill-dwarf', backgroundId: `${edition}:acolyte`, scores: { str: 15, dex: 14, con: 13, int: 12, wis: 10, cha: 8 }, boosts: edition === '2024' ? { ...zeros(), wis: 2, cha: 1 } : zeros(), skills: ['athletics', 'perception'], fightingStyleId: 'defense', masteries: edition === '2024' ? ['longsword', 'greatsword', 'flail'] : [] };
 }
+const withGear = (c: Character, patch: Partial<Character>): Character => ({ ...c, ...patch });
+describe('nível, PV e proficiência', () => {
+  it.each([[1, 2], [4, 2], [5, 3], [9, 4], [13, 5], [17, 6], [20, 6]])('nível %i = proficiência +%i', (level, bonus) => expect(proficiencyBonus(level)).toBe(bonus));
+  it('PV: dado máximo no 1º nível e média nos demais', () => {
+    const base = fixture('2024');
+    expect(derive({ ...base, level: 1 }).hp).toBe(12);
+    // d10: média 6 + Con (+1) = 7 por nível, mais 1 de robustez anã por nível.
+    expect(derive({ ...base, level: 5, asi: zeros() }).hp).toBe(12 + 4 * 7 + 4 * 1);
+  });
+  it('recusa nível fora de 1–20', () => { expect(integrityErrors({ ...fixture(), level: 0 }).length).toBeGreaterThan(0); expect(integrityErrors({ ...fixture(), level: 21 }).length).toBeGreaterThan(0); });
+  it('aumentos de atributo respeitam o nível e o teto de 20', () => {
+    expect(integrityErrors({ ...fixture(), asi: { ...zeros(), str: 2 } }).length).toBeGreaterThan(0);
+    const lvl4 = { ...fixture(), level: 4 };
+    expect(integrityErrors({ ...lvl4, asi: { ...zeros(), str: 2 } })).toEqual([]);
+    expect(derive({ ...lvl4, asi: { ...zeros(), str: 2 } }).scores.str).toBe(17);
+    expect(integrityErrors({ ...lvl4, asi: { ...zeros(), str: 3 } }).length).toBeGreaterThan(0);
+  });
+  it('sanitize remove escolhas que deixaram de valer ao reduzir o nível', () => { const high = { ...fixture(), level: 4, asi: { ...zeros(), str: 2 } }; expect(sanitize({ ...high, level: 1 }).asi).toEqual(zeros()); });
+});
+describe('CA, ataques e estilo de luta', () => {
+  it('armadura pesada ignora Destreza; escudo +2; Defesa +1 só com armadura', () => {
+    const c = withGear(fixture('2024'), { armorId: 'chain-mail', shield: true });
+    expect(derive(c).ac).toBe(16 + 2 + 1);
+    expect(derive(withGear(c, { armorId: '', shield: false })).ac).toBe(12);
+  });
+  it('armadura média limita Destreza a +2', () => { const c = withGear({ ...fixture('2014'), scores: { str: 8, dex: 15, con: 8, int: 8, wis: 8, cha: 8 }, fightingStyleId: '' }, { armorId: 'breastplate' }); expect(derive(c).ac).toBe(14 + 2); });
+  it('Bárbaro sem armadura soma Constituição; Monge soma Sabedoria', () => {
+    const barb: Character = { ...fixture('2024'), classId: '2024:barbarian', skills: ['athletics', 'perception'], fightingStyleId: '', masteries: ['greataxe', 'handaxe'] };
+    expect(derive(barb).ac).toBe(10 + 2 + 1);
+    const monk: Character = { ...fixture('2024'), classId: '2024:monk', skills: ['athletics', 'acrobatics'], fightingStyleId: '', masteries: [] };
+    expect(derive(monk).ac).toBe(10 + 2 + 1); // Sabedoria 12 (+2 do antecedente) = +1
+  });
+  it('ataque usa Força, Acuidade escolhe o melhor, arco usa Destreza + Arquearia', () => {
+    const c = withGear({ ...fixture('2024'), fightingStyleId: 'archery', masteries: [] }, { weaponIds: ['longsword', 'rapier', 'longbow'] });
+    const [sword, rapier, bow] = derive(c).attacks;
+    expect(sword.bonus).toBe(4); expect(rapier.bonus).toBe(4); // Força +2 e Destreza +2: empate favorece Força
+    expect(rapier.ability).toBe('str');
+    expect(bow.ability).toBe('dex'); expect(bow.bonus).toBe(2 + 2 + 2);
+  });
+  it('sem proficiência não soma bônus', () => { const wiz: Character = { ...fixture('2024'), classId: '2024:wizard', skills: ['arcana', 'history'], fightingStyleId: '', masteries: [], weaponIds: ['greatsword'] }; expect(derive(wiz).attacks[0].proficient).toBe(false); });
+  it('exige estilo de luta e maestrias para concluir', () => {
+    expect(creationErrors({ ...fixture('2024'), fightingStyleId: '' })).toContain('Escolha um estilo de luta.');
+    expect(creationErrors({ ...fixture('2024'), masteries: [] }).join()).toContain('maestria');
+    expect(integrityErrors({ ...fixture('2014'), masteries: ['longsword'] }).length).toBeGreaterThan(0);
+  });
+});
+describe('conjuração', () => {
+  it('Mago nível 1 e 5 (2024)', () => {
+    const wiz: Character = { ...fixture('2024'), classId: '2024:wizard', skills: ['arcana', 'history'], fightingStyleId: '', masteries: [], scores: { str: 8, dex: 14, con: 14, int: 15, wis: 8, cha: 8 } };
+    const s1 = derive(wiz).spellcasting!; expect(s1.cantrips).toBe(3); expect(s1.prepared).toBe(4); expect(s1.slots).toEqual([2]); expect(s1.dc).toBe(8 + 2 + derive(wiz).mods.int);
+    expect(derive({ ...wiz, level: 5 }).spellcasting!.slots).toEqual([4, 3, 2]);
+  });
+  it('meio-conjuradores 2014 só conjuram a partir do 2º nível', () => {
+    const pal: Character = { ...fixture('2014'), classId: '2014:paladin', skills: ['athletics', 'intimidation'], fightingStyleId: '' };
+    expect(derive(pal).spellcasting!.slots).toEqual([]); expect(derive({ ...pal, level: 2, fightingStyleId: '' }).spellcasting!.slots).toEqual([2]);
+  });
+  it('Bruxo usa Magia de Pacto', () => { const wl: Character = { ...fixture('2024'), classId: '2024:warlock', skills: ['arcana', 'history'], fightingStyleId: '', masteries: [] }; expect(derive(wl).spellcasting!.pact).toEqual({ count: 1, level: 1 }); });
+});
 describe('compra de atributos', () => {
   it.each([[8, 0], [9, 1], [10, 2], [11, 3], [12, 4], [13, 5], [14, 7], [15, 9]])('custo %i = %i', (score, cost) => { expect(pointSpend({ str: score, dex: 8, con: 8, int: 8, wis: 8, cha: 8 })).toBe(cost); });
   it('soma 27 para 15/14/13/12/10/8', () => expect(pointSpend(fixture().scores)).toBe(27));
